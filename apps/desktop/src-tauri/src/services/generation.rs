@@ -1,16 +1,18 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use grok_voice_audio::{probe_duration_ms, FfmpegConfig};
 use grok_voice_core::{
-    default_split, save_project, AppError, Character, ScriptSegment, SegmentKind, SegmentStatus,
-    TtsOutputFormat, TtsRequest,
+    build_tts_text, default_split, save_project, suggest_concurrency, with_retry_context, AppError,
+    ScriptSegment, SegmentKind, SegmentStatus, TtsOutputFormat, TtsRequest,
 };
+use chrono::Utc;
 use grok_voice_storage::{load_api_key, new_cache_entry, AudioCache, SettingsStore, SfxStore};
 use grok_voice_xai::XaiTtsProvider;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter};
 use std::sync::Mutex;
+use tauri::{AppHandle, Emitter};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use crate::log_store::LogStore;
@@ -33,6 +35,10 @@ pub struct GenerateProgressEvent {
     pub status: String,
     pub error: Option<String>,
     pub cached: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_concurrency: Option<u32>,
 }
 
 pub struct GenerationService;
@@ -43,11 +49,22 @@ impl GenerationService {
         f(guard.as_ref().and_then(|g| g.as_ref()))
     }
 
+    async fn persist_project(project_svc: &ProjectService) {
+        if let (Some(mut project), Some(paths)) =
+            (project_svc.get().await, project_svc.paths().await)
+        {
+            ProjectService::normalize_segment_paths(&mut project, &paths);
+            project_svc.set(project.clone()).await;
+            let _ = save_project(&project, &paths);
+        }
+    }
+
     pub async fn generate_one(
         project_svc: &ProjectService,
         cache: &Arc<Mutex<Option<AudioCache>>>,
         segment_id: &str,
         force: bool,
+        autosave: bool,
     ) -> Result<ScriptSegment, AppError> {
         let segment = {
             let project = project_svc.get().await.ok_or(AppError::Other("尚未開啟專案".into()))?;
@@ -60,7 +77,7 @@ impl GenerationService {
         };
 
         if segment.segment_kind == SegmentKind::Sfx {
-            return Self::resolve_sfx_segment(project_svc, &segment, force).await;
+            return Self::resolve_sfx_segment(project_svc, &segment, force, autosave).await;
         }
 
         let api_key = load_api_key()?.ok_or(AppError::MissingApiKey)?;
@@ -136,7 +153,10 @@ impl GenerationService {
             output_format: output_format.clone(),
         };
 
-        let result = provider.synthesize_preferred(req, use_streaming).await?;
+        let result = with_retry_context(Some(segment_id.to_string()), || async {
+            provider.synthesize_preferred(req, use_streaming).await
+        })
+        .await?;
         let ext = if result.content_type.contains("wav") {
             "wav"
         } else {
@@ -176,10 +196,8 @@ impl GenerationService {
         };
 
         project_svc.update_segment(segment_id, |s| *s = updated.clone()).await;
-        if let (Some(mut project), Some(paths)) = (project_svc.get().await, project_svc.paths().await) {
-            ProjectService::normalize_segment_paths(&mut project, &paths);
-            project_svc.set(project.clone()).await;
-            let _ = save_project(&project, &paths);
+        if autosave {
+            Self::persist_project(project_svc).await;
         }
 
         Ok(updated)
@@ -194,6 +212,7 @@ impl GenerationService {
         only_failed: bool,
         force: bool,
         concurrency: usize,
+        batch_tts_retries: Arc<AtomicUsize>,
     ) -> Result<String, AppError> {
         let job_id = Uuid::new_v4().to_string();
         let segment_ids: Vec<String> = {
@@ -228,74 +247,121 @@ impl GenerationService {
             }
         }
 
-        let _concurrency = concurrency;
-        let mut current = 0usize;
+        let workers = concurrency.max(1);
+        logs.append_with_emit(
+            &app,
+            "info",
+            "generate",
+            format!("並行度：{workers}"),
+        );
+
+        let semaphore = Arc::new(Semaphore::new(workers));
+        let completed = Arc::new(AtomicUsize::new(0));
+        let mut join_set = tokio::task::JoinSet::new();
 
         for id in segment_ids {
-            if controls.cancel.load(Ordering::Relaxed) {
-                break;
-            }
+            let project_svc = project_svc.clone();
+            let cache = cache.clone();
+            let app = app.clone();
+            let controls = controls.clone();
+            let logs = logs.clone();
+            let job_id = job_id.clone();
+            let semaphore = semaphore.clone();
+            let completed = completed.clone();
 
-            while controls.pause.load(Ordering::Relaxed) {
-                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-            }
+            join_set.spawn(async move {
+                let _permit = match semaphore.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => return,
+                };
 
-            let step = current + 1;
-            logs.append_with_emit(&app, "info", "generate", format!("[{step}/{total}] 生成段落 {id}"));
-            let result = Self::generate_one(&project_svc, &cache, &id, force).await;
-
-            current += 1;
-            match result {
-                Ok(seg) => {
-                    let cached = seg.status == SegmentStatus::Cached;
-                    logs.append_with_emit(
-                        &app,
-                        "info",
-                        "generate",
-                        format!(
-                            "[{step}/{total}] 完成 {id}{}",
-                            if cached { " (快取)" } else { "" }
-                        ),
-                    );
-                    let _ = app.emit(
-                        "generate-progress",
-                        GenerateProgressEvent {
-                            job_id: job_id.clone(),
-                            current,
-                            total,
-                            segment_id: Some(id.clone()),
-                            segment: Some(seg),
-                            status: "done".into(),
-                            error: None,
-                            cached,
-                        },
-                    );
+                if controls.cancel.load(Ordering::Relaxed) {
+                    return;
                 }
-                Err(e) => {
-                    logs.append_with_emit(&app, "error", "generate", format!("[{step}/{total}] 失敗 {id}: {e}"));
-                    project_svc
-                        .update_segment(&id, |s| {
-                            s.status = SegmentStatus::Failed;
-                            s.error_message = Some(e.to_string());
-                        })
-                        .await;
-                    let _ = app.emit(
-                        "generate-progress",
-                        GenerateProgressEvent {
-                            job_id: job_id.clone(),
-                            current,
-                            total,
-                            segment_id: Some(id),
-                            segment: None,
-                            status: "failed".into(),
-                            error: Some(e.to_string()),
-                            cached: false,
-                        },
-                    );
+
+                while controls.pause.load(Ordering::Relaxed) {
+                    if controls.cancel.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
                 }
+
+                logs.append_with_emit(&app, "info", "generate", format!("生成段落 {id}"));
+                let result = Self::generate_one(&project_svc, &cache, &id, force, false).await;
+                let current = completed.fetch_add(1, Ordering::SeqCst) + 1;
+
+                match result {
+                    Ok(seg) => {
+                        let cached = seg.status == SegmentStatus::Cached;
+                        logs.append_with_emit(
+                            &app,
+                            "info",
+                            "generate",
+                            format!(
+                                "[{current}/{total}] 完成 {id}{}",
+                                if cached { " (快取)" } else { "" }
+                            ),
+                        );
+                        let _ = app.emit(
+                            "generate-progress",
+                            GenerateProgressEvent {
+                                job_id: job_id.clone(),
+                                current,
+                                total,
+                                segment_id: Some(id.clone()),
+                                segment: Some(seg),
+                                status: "done".into(),
+                                error: None,
+                                cached,
+                                retry_count: None,
+                                suggested_concurrency: None,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        logs.append_with_emit(
+                            &app,
+                            "error",
+                            "generate",
+                            format!("[{current}/{total}] 失敗 {id}: {e}"),
+                        );
+                        project_svc
+                            .update_segment(&id, |s| {
+                                s.status = SegmentStatus::Failed;
+                                s.error_message = Some(e.to_string());
+                            })
+                            .await;
+                        let _ = app.emit(
+                            "generate-progress",
+                            GenerateProgressEvent {
+                                job_id: job_id.clone(),
+                                current,
+                                total,
+                                segment_id: Some(id),
+                                segment: None,
+                                status: "failed".into(),
+                                error: Some(e.to_string()),
+                                cached: false,
+                                retry_count: None,
+                                suggested_concurrency: None,
+                            },
+                        );
+                    }
+                }
+
+                drop(_permit);
+            });
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            if let Err(e) = res {
+                logs.append_with_emit(&app, "error", "generate", format!("批次任務異常：{e}"));
             }
         }
 
+        Self::persist_project(&project_svc).await;
+
+        let current = completed.load(Ordering::SeqCst);
         let cancelled = controls.cancel.load(Ordering::Relaxed);
         let status = if cancelled { "cancelled" } else { "completed" };
         logs.append_with_emit(
@@ -315,6 +381,29 @@ impl GenerationService {
             }
         }
 
+        let retry_count = batch_tts_retries.load(Ordering::Relaxed) as u32;
+        let configured = concurrency as u32;
+        let suggested = suggest_concurrency(configured, retry_count as usize);
+        if let Some(suggested) = suggested {
+            logs.append_with_emit(
+                &app,
+                "warn",
+                "generate",
+                format!(
+                    "批次遭遇 {retry_count} 次 API 重試，建議並行度由 {configured} 降至 {suggested}"
+                ),
+            );
+        }
+
+        if let Ok(store) = SettingsStore::open() {
+            if let Ok(mut app_settings) = store.load() {
+                app_settings.last_batch_retry_count = retry_count;
+                app_settings.suggested_concurrency = suggested;
+                app_settings.last_batch_at = Some(Utc::now().to_rfc3339());
+                let _ = store.save(&app_settings);
+            }
+        }
+
         let _ = app.emit(
             "generate-progress",
             GenerateProgressEvent {
@@ -324,8 +413,12 @@ impl GenerationService {
                 segment_id: None,
                 segment: None,
                 status: status.into(),
-                error: None,
+                error: suggested.map(|s| {
+                    format!("建議將並行度由 {configured} 降至 {s}（本批次 API 重試 {retry_count} 次）")
+                }),
                 cached: false,
+                retry_count: if retry_count > 0 { Some(retry_count) } else { None },
+                suggested_concurrency: suggested,
             },
         );
 
@@ -382,6 +475,7 @@ impl GenerationService {
         project_svc: &ProjectService,
         segment: &ScriptSegment,
         _force: bool,
+        autosave: bool,
     ) -> Result<ScriptSegment, AppError> {
         let sfx_id = segment
             .sfx_id
@@ -406,10 +500,8 @@ impl GenerationService {
         project_svc
             .update_segment(&segment.id, |s| *s = updated.clone())
             .await;
-        if let (Some(mut project), Some(paths)) = (project_svc.get().await, project_svc.paths().await) {
-            ProjectService::normalize_segment_paths(&mut project, &paths);
-            project_svc.set(project.clone()).await;
-            let _ = save_project(&project, &paths);
+        if autosave {
+            Self::persist_project(project_svc).await;
         }
         Ok(updated)
     }
@@ -430,22 +522,9 @@ fn log_warn_empty_batch(logs: &LogStore, app: &AppHandle) {
             status: "failed".into(),
             error: Some(msg.into()),
             cached: false,
+            retry_count: None,
+            suggested_concurrency: None,
         },
     );
 }
 
-fn build_tts_text(segment: &ScriptSegment, character: &Character) -> String {
-    let mut text = segment.text.clone();
-    if let Some(style) = &character.voice_profile.style_prompt {
-        if !style.is_empty() && segment.emotion_hint.is_none() {
-            text = format!("{text}");
-        }
-    }
-    if let Some(emotion) = &segment.emotion_hint {
-        if !text.contains('[') {
-            text = format!("{text}");
-            let _ = emotion;
-        }
-    }
-    text
-}

@@ -26,6 +26,7 @@ interface Props {
   progress: { current: number; total: number };
   generating: boolean;
   paused: boolean;
+  retryMessage?: string | null;
   onSelect: (id: string) => void;
   onGenerate: (id: string) => void;
   onPlay: (path?: string) => void;
@@ -45,6 +46,7 @@ export function SegmentTable({
   progress,
   generating,
   paused,
+  retryMessage,
   onSelect,
   onGenerate,
   onPlay,
@@ -81,6 +83,9 @@ export function SegmentTable({
         </span>
         {generateBlockedReason && (
           <span className="queue-hint">{generateBlockedReason}</span>
+        )}
+        {retryMessage && (
+          <span className="queue-hint queue-retry">{t(lang, "apiRetrying")} {retryMessage}</span>
         )}
         <div className="progress-bar">
           <div

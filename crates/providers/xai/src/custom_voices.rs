@@ -71,8 +71,9 @@ impl XaiTtsProvider {
 
             if !resp.status().is_success() {
                 let status = resp.status();
+                let retry_after_secs = XaiTtsProvider::parse_retry_after(resp.headers());
                 let body = resp.text().await.unwrap_or_default();
-                return Err(map_status_error(status, &body));
+                return Err(map_status_error(status, &body, retry_after_secs));
             }
 
             let page: CustomVoicesPage = resp
@@ -121,7 +122,7 @@ impl XaiTtsProvider {
             return Err(AppError::Other(format!("找不到參考音訊: {}", req.file_path)));
         }
 
-        let bytes = std::fs::read(path).map_err(|e| AppError::Io(e))?;
+        let bytes = std::fs::read(path).map_err(AppError::Io)?;
         let file_name = path
             .file_name()
             .and_then(|n| n.to_str())
@@ -180,8 +181,9 @@ impl XaiTtsProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let retry_after_secs = XaiTtsProvider::parse_retry_after(resp.headers());
             let body = resp.text().await.unwrap_or_default();
-            return Err(map_status_error(status, &body));
+            return Err(map_status_error(status, &body, retry_after_secs));
         }
 
         resp.json()
@@ -205,8 +207,9 @@ impl XaiTtsProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let retry_after_secs = XaiTtsProvider::parse_retry_after(resp.headers());
             let body = resp.text().await.unwrap_or_default();
-            return Err(map_status_error(status, &body));
+            return Err(map_status_error(status, &body, retry_after_secs));
         }
 
         Ok(true)

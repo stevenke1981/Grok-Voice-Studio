@@ -21,7 +21,9 @@ pub enum AppError {
     AuthFailed,
 
     #[error("Rate limited")]
-    RateLimited,
+    RateLimited {
+        retry_after_secs: Option<u64>,
+    },
 
     #[error("Quota exceeded")]
     QuotaExceeded,

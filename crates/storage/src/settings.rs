@@ -24,6 +24,15 @@ pub struct AppSettings {
     pub ui_language: String,
     #[serde(default = "default_true")]
     pub use_streaming_tts: bool,
+    /// API retries observed in the most recent batch generation job.
+    #[serde(default)]
+    pub last_batch_retry_count: u32,
+    /// Recommended concurrency from recent batch retries; cleared after apply.
+    #[serde(default)]
+    pub suggested_concurrency: Option<u32>,
+    /// RFC3339 timestamp of the last batch stats update.
+    #[serde(default)]
+    pub last_batch_at: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -50,6 +59,9 @@ impl Default for AppSettings {
             onboarding_done: false,
             ui_language: "zh".into(),
             use_streaming_tts: true,
+            last_batch_retry_count: 0,
+            suggested_concurrency: None,
+            last_batch_at: None,
         }
     }
 }

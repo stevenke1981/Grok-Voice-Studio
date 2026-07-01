@@ -13,7 +13,8 @@ use tokio_tungstenite::{
     },
 };
 
-use crate::provider::{codec_to_str, TtsProvider, XaiTtsProvider};
+use crate::provider::{codec_to_str, XaiTtsProvider};
+use crate::retry::{is_rate_limit_message, with_retry_category};
 
 pub const XAI_TTS_WS_URL: &str = "wss://api.x.ai/v1/tts";
 
@@ -158,11 +159,20 @@ impl XaiTtsProvider {
                             }
                             StreamEventKind::AudioDone => break,
                             StreamEventKind::Error => {
-                                return Err(AppError::ProviderUnavailable(
-                                    event
-                                        .error_message
-                                        .unwrap_or_else(|| "streaming TTS error".into()),
-                                ));
+                                let msg = event
+                                    .error_message
+                                    .unwrap_or_else(|| "streaming TTS error".into());
+                                let lower = msg.to_ascii_lowercase();
+                                if lower.contains("quota exceeded") || lower.contains("payment required")
+                                {
+                                    return Err(AppError::QuotaExceeded);
+                                }
+                                if is_rate_limit_message(&msg) {
+                                    return Err(AppError::RateLimited {
+                                        retry_after_secs: None,
+                                    });
+                                }
+                                return Err(AppError::ProviderUnavailable(msg));
                             }
                             StreamEventKind::Other => {}
                         }
@@ -202,16 +212,31 @@ impl XaiTtsProvider {
         req: TtsRequest,
         use_streaming: bool,
     ) -> Result<TtsResult, AppError> {
+        with_retry_category(
+            || async { self.synthesize_preferred_once(req.clone(), use_streaming).await },
+            "tts",
+        )
+        .await
+    }
+
+    async fn synthesize_preferred_once(
+        &self,
+        req: TtsRequest,
+        use_streaming: bool,
+    ) -> Result<TtsResult, AppError> {
         if use_streaming {
             match self.synthesize_streaming(req.clone()).await {
                 Ok(result) => Ok(result),
                 Err(e) => {
+                    if matches!(e, AppError::RateLimited { .. }) {
+                        return Err(e);
+                    }
                     tracing::warn!(target: "xai_tts", "streaming TTS failed, falling back to REST: {e}");
-                    self.synthesize(req).await
+                    self.synthesize_once(req).await
                 }
             }
         } else {
-            self.synthesize(req).await
+            self.synthesize_once(req).await
         }
     }
 }

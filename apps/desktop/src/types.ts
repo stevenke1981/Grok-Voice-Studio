@@ -107,6 +107,21 @@ export interface ProjectStats {
   estimated_cost?: number;
 }
 
+export interface ApiRetryEvent {
+  category: string;
+  context?: string;
+  message: string;
+  attempt: number;
+  max_retries: number;
+  delay_secs: number;
+}
+
+export interface StoryConvertProgressEvent {
+  attempt: number;
+  phase: string;
+  message?: string;
+}
+
 export interface GenerateProgressEvent {
   job_id: string;
   current: number;
@@ -116,6 +131,8 @@ export interface GenerateProgressEvent {
   status: string;
   error?: string;
   cached: boolean;
+  retry_count?: number;
+  suggested_concurrency?: number;
 }
 
 export interface LogEntry {
@@ -136,4 +153,7 @@ export interface AppSettings {
   onboarding_done: boolean;
   ui_language: string;
   use_streaming_tts: boolean;
+  last_batch_retry_count?: number;
+  suggested_concurrency?: number | null;
+  last_batch_at?: string | null;
 }

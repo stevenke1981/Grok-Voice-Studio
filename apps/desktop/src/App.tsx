@@ -16,9 +16,11 @@ import { SettingsModal } from "./components/SettingsModal";
 import { resolveWorkflowStep, WorkflowGuide } from "./components/WorkflowGuide";
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useAutoSave } from "./hooks/useAutoSave";
+import { useApiRetry } from "./hooks/useApiRetry";
 import { useGeneration } from "./hooks/useGeneration";
 import { useLogs } from "./hooks/useLogs";
-import { t, type Lang } from "./i18n";
+import { useStoryConvert } from "./hooks/useStoryConvert";
+import { t, tf, type Lang } from "./i18n";
 import type {
   AppSettings,
   ExportOptions,
@@ -68,7 +70,64 @@ function App() {
 
   const { play } = useAudioPlayer();
   const generation = useGeneration(setProject);
+  const {
+    retryMessage: apiRetryMessage,
+    retryCategory: apiRetryCategory,
+    clearRetry: clearApiRetry,
+  } = useApiRetry();
+  const [syncingVoices, setSyncingVoices] = useState(false);
+  const [previewingVoice, setPreviewingVoice] = useState<string | null>(null);
+  const [convertingStory, setConvertingStory] = useState(false);
+  const storyConvert = useStoryConvert();
   const { logs, refresh: refreshLogs, clear: clearLogs } = useLogs(screen === "editor");
+
+  const liveConcurrencyHint = generation.concurrencyHint
+    ? tf(lang, "concurrencyHint", {
+        n: generation.concurrencyHint.retryCount,
+        c: generation.concurrencyHint.suggested,
+      })
+    : null;
+
+  const persistedConcurrencyHint =
+    !liveConcurrencyHint &&
+    settings.suggested_concurrency != null &&
+    settings.suggested_concurrency < concurrency
+      ? tf(lang, "concurrencyHint", {
+          n: settings.last_batch_retry_count ?? 0,
+          c: settings.suggested_concurrency,
+        })
+      : null;
+
+  const concurrencyHintText = liveConcurrencyHint ?? persistedConcurrencyHint;
+
+  const handleApplyConcurrencyHint = async () => {
+    const suggested =
+      generation.concurrencyHint?.suggested ?? settings.suggested_concurrency;
+    if (suggested == null) return;
+    try {
+      const applied = await invoke<number>("apply_concurrency_suggestion", {
+        suggested,
+        retryCount:
+          generation.concurrencyHint?.retryCount ?? settings.last_batch_retry_count ?? 0,
+      });
+      setConcurrency(applied);
+      generation.clearConcurrencyHint();
+      await loadSettings();
+      setSuccess(`並行度已儲存為 ${applied}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const handleDismissConcurrencyHint = async () => {
+    generation.clearConcurrencyHint();
+    try {
+      await invoke("dismiss_concurrency_suggestion");
+      await loadSettings();
+    } catch {
+      /* ignore */
+    }
+  };
 
   useAutoSave(!!settings.auto_save && screen === "editor", [project?.script_raw, project?.characters, project?.segments]);
 
@@ -105,12 +164,16 @@ function App() {
   }, []);
 
   const syncVoices = useCallback(async () => {
+    setSyncingVoices(true);
     try {
       setVoices(await invoke<VoiceInfo[]>("sync_voices"));
+      clearApiRetry();
     } catch (e) {
       setError(String(e));
+    } finally {
+      setSyncingVoices(false);
     }
-  }, []);
+  }, [clearApiRetry]);
 
   useEffect(() => {
     loadRecent();
@@ -224,14 +287,20 @@ function App() {
   };
 
   const handleConvertStory = async () => {
-    if (!storyText.trim()) return;
+    if (!storyText.trim() || convertingStory) return;
+    setConvertingStory(true);
+    storyConvert.reset();
     try {
       const p = await invoke<Project>("convert_story", { story: storyText, style: storyStyle });
+      clearApiRetry();
+      storyConvert.reset();
       setProject(p);
       setEditorMode("dialogue");
       setSuccess(`Story Mode 產出 ${p.segments.length} 句`);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setConvertingStory(false);
     }
   };
 
@@ -263,11 +332,15 @@ function App() {
   };
 
   const handlePreviewVoice = async (voiceId: string) => {
+    setPreviewingVoice(voiceId);
     try {
       const path = await invoke<string>("preview_voice", { voiceId, text: null });
+      clearApiRetry();
       await play(path);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setPreviewingVoice(null);
     }
   };
 
@@ -395,7 +468,17 @@ function App() {
         )}
         <button className="btn" onClick={() => { setScreen("home"); setProject(null); }}>{t(lang, "home")}</button>
         <button className="btn" onClick={() => invoke("save_current_project")}>{t(lang, "save")}</button>
-        <button className="btn" onClick={syncVoices}>{t(lang, "syncVoices")}</button>
+        <button className="btn" onClick={syncVoices} disabled={syncingVoices}>
+          {syncingVoices ? `${t(lang, "syncVoices")}…` : t(lang, "syncVoices")}
+        </button>
+        {apiRetryMessage && (
+          <span className="topbar-retry" title={apiRetryMessage}>
+            {t(lang, "apiRetrying")} {apiRetryMessage}
+          </span>
+        )}
+        {previewingVoice && !apiRetryMessage && (
+          <span className="topbar-retry">{t(lang, "preview")}…</span>
+        )}
         <button className="btn" onClick={() => setShowSettings(true)}>{t(lang, "settings")}</button>
         <button className="btn" onClick={() => invoke("cleanup_cache").then((n) => setSuccess(`清理 ${n} 筆`))}>{t(lang, "cleanupCache")}</button>
         <button className="btn" onClick={() => invoke("export_debug_bundle").then((p) => setSuccess(`Debug: ${p}`))}>{t(lang, "debugBundle")}</button>
@@ -459,6 +542,12 @@ function App() {
             }
           }}
           onConvertStory={handleConvertStory}
+          convertingStory={convertingStory}
+          storyRetryMessage={
+            convertingStory && apiRetryCategory === "chat" ? apiRetryMessage : null
+          }
+          storyAttempt={storyConvert.attempt}
+          storyPhase={storyConvert.phase}
           storyStyle={storyStyle}
           onStoryStyleChange={setStoryStyle}
         />
@@ -497,6 +586,18 @@ function App() {
         </div>
       )}
 
+      {concurrencyHintText && (
+        <div className="concurrency-hint-banner">
+          <span>{concurrencyHintText}</span>
+          <button type="button" className="btn btn-sm" onClick={handleApplyConcurrencyHint}>
+            {t(lang, "applyConcurrencyHint")}
+          </button>
+          <button type="button" className="btn btn-sm" onClick={handleDismissConcurrencyHint}>
+            {t(lang, "close")}
+          </button>
+        </div>
+      )}
+
       <SegmentTable
         lang={lang}
         project={project}
@@ -504,6 +605,7 @@ function App() {
         progress={generation.progress}
         generating={generation.generating}
         paused={generation.paused}
+        retryMessage={generation.generating ? apiRetryMessage : null}
         onSelect={setSelectedSegId}
         onGenerate={(id) => generation.generateOne(id).catch((e) => setError(String(e)))}
         onPlay={(path) => play(path).catch((e) => setError(String(e)))}
@@ -550,6 +652,8 @@ function App() {
           onClose={() => setShowSettings(false)}
           onVerified={loadSettings}
           onVoicesChanged={syncVoices}
+          concurrencyHint={concurrencyHintText}
+          onApplyConcurrencyHint={handleApplyConcurrencyHint}
         />
       )}
     </div>

@@ -1,6 +1,10 @@
-use grok_voice_core::{AppError, StoryScript, STORY_SYSTEM_PROMPT};
-use reqwest::StatusCode;
+use grok_voice_core::{
+    emit_story_convert, AppError, StoryConvertProgress, StoryScript, STORY_SYSTEM_PROMPT,
+};
 use serde::{Deserialize, Serialize};
+
+use crate::provider::{map_status_error, XaiTtsProvider};
+use crate::retry::with_retry_category;
 
 const XAI_CHAT_URL: &str = "https://api.x.ai/v1/chat/completions";
 
@@ -18,6 +22,18 @@ impl XaiChatClient {
     }
 
     pub async fn story_to_script(
+        &self,
+        story: &str,
+        style: Option<&str>,
+    ) -> Result<StoryScript, AppError> {
+        with_retry_category(
+            || self.story_to_script_once(story, style),
+            "chat",
+        )
+        .await
+    }
+
+    pub async fn story_to_script_once(
         &self,
         story: &str,
         style: Option<&str>,
@@ -54,12 +70,9 @@ impl XaiChatClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
+            let retry_after_secs = XaiTtsProvider::parse_retry_after(resp.headers());
             let text = resp.text().await.unwrap_or_default();
-            return Err(match status {
-                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => AppError::AuthFailed,
-                StatusCode::TOO_MANY_REQUESTS => AppError::RateLimited,
-                _ => AppError::ProviderUnavailable(format!("HTTP {status}: {text}")),
-            });
+            return Err(map_status_error(status, &text, retry_after_secs));
         }
 
         let data: ChatResponse = resp
@@ -113,22 +126,44 @@ fn parse_story_json(content: &str) -> Result<StoryScript, AppError> {
     };
 
     serde_json::from_str(json_str).map_err(|e| {
-        // Try repair: ask to fix would need second call; for now return parse error
         AppError::Other(format!("Story JSON 解析失敗: {e}"))
     })
 }
 
+fn is_story_json_error(err: &AppError) -> bool {
+    matches!(err, AppError::Other(msg) if msg.contains("Story JSON"))
+}
+
+/// API retries (rate limit / transient errors) plus one JSON-repair retry for invalid LLM output.
 pub async fn story_to_script_with_retry(
     client: &XaiChatClient,
     story: &str,
     style: Option<&str>,
 ) -> Result<StoryScript, AppError> {
     match client.story_to_script(story, style).await {
-        Ok(s) => Ok(s),
-        Err(_) => {
-            // One retry with explicit instruction
+        Ok(script) => Ok(script),
+        Err(err) if is_story_json_error(&err) => {
+            emit_story_convert(StoryConvertProgress {
+                attempt: 2,
+                phase: "json_repair",
+                message: Some("LLM 輸出 JSON 無效，嘗試修復".into()),
+            });
             let retry_story = format!("{story}\n\n請確保輸出有效 JSON。");
             client.story_to_script(&retry_story, style).await
         }
+        Err(err) => Err(err),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_story_json_parse_errors() {
+        assert!(is_story_json_error(&AppError::Other(
+            "Story JSON 解析失敗: trailing".into()
+        )));
+        assert!(!is_story_json_error(&AppError::AuthFailed));
     }
 }

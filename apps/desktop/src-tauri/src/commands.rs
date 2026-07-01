@@ -12,7 +12,7 @@ use grok_voice_xai::{
     fallback_voices, story_to_script_with_retry, CreateCustomVoiceRequest, XaiChatClient,
     XaiTtsProvider,
 };
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::log_store::{log_error, log_info, log_warn, LogEntry};
@@ -37,7 +37,43 @@ pub async fn get_settings() -> Result<serde_json::Value, String> {
         "onboarding_done": settings.onboarding_done,
         "ui_language": settings.ui_language,
         "use_streaming_tts": settings.use_streaming_tts,
+        "last_batch_retry_count": settings.last_batch_retry_count,
+        "suggested_concurrency": settings.suggested_concurrency,
+        "last_batch_at": settings.last_batch_at,
     }))
+}
+
+#[tauri::command]
+pub async fn apply_concurrency_suggestion(
+    suggested: u32,
+    retry_count: Option<u32>,
+    state: State<'_, AppState>,
+) -> Result<u32, String> {
+    let store = SettingsStore::open().map_err(err)?;
+    let mut settings = store.load().map_err(err)?;
+    let applied = suggested.clamp(1, 5);
+    settings.generation_concurrency = applied;
+    if let Some(count) = retry_count {
+        settings.last_batch_retry_count = count;
+    }
+    settings.suggested_concurrency = None;
+    store.save(&settings).map_err(err)?;
+    log_info(
+        &state.logs,
+        "settings",
+        format!("並行度已套用並儲存：{applied}"),
+    );
+    Ok(applied)
+}
+
+#[tauri::command]
+pub async fn dismiss_concurrency_suggestion(state: State<'_, AppState>) -> Result<(), String> {
+    let store = SettingsStore::open().map_err(err)?;
+    let mut settings = store.load().map_err(err)?;
+    settings.suggested_concurrency = None;
+    store.save(&settings).map_err(err)?;
+    log_info(&state.logs, "settings", "已略過並行度建議");
+    Ok(())
 }
 
 #[tauri::command]
@@ -177,15 +213,31 @@ pub async fn parse_script_command(
 
 #[tauri::command]
 pub async fn convert_story(
+    app: tauri::AppHandle,
     story: String,
     style: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<Project, String> {
     let api_key = load_api_key().map_err(err)?.ok_or("尚未設定 API Key")?;
+    let _ = app.emit(
+        "story-convert-progress",
+        crate::events::StoryConvertProgressEvent {
+            attempt: 1,
+            phase: "api".into(),
+            message: None,
+        },
+    );
+    log_info(
+        &state.logs,
+        "story",
+        format!("Story 轉換開始（{} 字）", story.chars().count()),
+    );
     let client = XaiChatClient::new(api_key);
-    let script = story_to_script_with_retry(&client, &story, style.as_deref())
-        .await
-        .map_err(err)?;
+    let script = grok_voice_core::with_retry_context(Some("story".into()), || async {
+        story_to_script_with_retry(&client, &story, style.as_deref()).await
+    })
+    .await
+    .map_err(err)?;
 
     let mut project = state.project_svc.get().await.ok_or("尚未開啟專案")?;
     apply_story_script(&mut project, &script).map_err(err)?;
@@ -194,6 +246,11 @@ pub async fn convert_story(
     if let Some(paths) = state.project_svc.paths().await {
         grok_voice_core::save_project(&project, &paths).map_err(err)?;
     }
+    log_info(
+        &state.logs,
+        "story",
+        format!("Story 轉換完成：{} 句", project.segments.len()),
+    );
     Ok(project)
 }
 
@@ -234,16 +291,19 @@ pub async fn get_project_stats(state: State<'_, AppState>) -> Result<serde_json:
 
 #[tauri::command]
 pub async fn sync_voices() -> Result<Vec<VoiceInfo>, String> {
-    match load_api_key().map_err(err)? {
-        Some(key) => {
-            let provider = XaiTtsProvider::new(key);
-            match provider.list_all_voices().await {
-                Ok(voices) if !voices.is_empty() => Ok(voices),
-                _ => Ok(fallback_voices()),
+    grok_voice_core::with_retry_context(Some("voices".into()), || async {
+        match load_api_key().map_err(err)? {
+            Some(key) => {
+                let provider = XaiTtsProvider::new(key);
+                match provider.list_all_voices().await {
+                    Ok(voices) if !voices.is_empty() => Ok(voices),
+                    _ => Ok(fallback_voices()),
+                }
             }
+            None => Ok(fallback_voices()),
         }
-        None => Ok(fallback_voices()),
-    }
+    })
+    .await
 }
 
 #[tauri::command]
@@ -257,6 +317,7 @@ pub async fn generate_segment(
         &state.cache,
         &segment_id,
         force.unwrap_or(false),
+        true,
     )
     .await
     .map_err(err)
@@ -317,6 +378,9 @@ pub async fn start_generate_job(
 
     state.generation_controls.cancel.store(false, std::sync::atomic::Ordering::Relaxed);
     state.generation_controls.pause.store(false, std::sync::atomic::Ordering::Relaxed);
+    state
+        .batch_tts_retries
+        .store(0, std::sync::atomic::Ordering::Relaxed);
 
     let store = SettingsStore::open().map_err(err)?;
     let settings = store.load().map_err(err)?;
@@ -328,6 +392,7 @@ pub async fn start_generate_job(
     let controls = state.generation_controls.clone();
     let active_job = state.active_job_id.clone();
     let logs = state.logs.clone();
+    let batch_tts_retries = state.batch_tts_retries.clone();
     let job_id_clone = job_id.clone();
 
     log_info(
@@ -350,6 +415,7 @@ pub async fn start_generate_job(
             only_failed,
             force,
             concurrency,
+            batch_tts_retries,
         )
         .await;
     });
@@ -447,18 +513,22 @@ pub async fn preview_voice(
         .use_streaming_tts;
     let provider = XaiTtsProvider::new(api_key);
     let sample = text.unwrap_or_else(|| "你好，這是語音試聽。".into());
-    let result = provider
-        .synthesize_preferred(
-            grok_voice_core::TtsRequest {
-                text: sample,
-                voice_id,
-                language: "zh".into(),
-                output_format: grok_voice_core::TtsOutputFormat::default(),
-            },
-            use_streaming,
-        )
-        .await
-        .map_err(err)?;
+    let preview_ctx = format!("preview:{voice_id}");
+    let result = grok_voice_core::with_retry_context(Some(preview_ctx), || async {
+        provider
+            .synthesize_preferred(
+                grok_voice_core::TtsRequest {
+                    text: sample,
+                    voice_id: voice_id.clone(),
+                    language: "zh".into(),
+                    output_format: grok_voice_core::TtsOutputFormat::default(),
+                },
+                use_streaming,
+            )
+            .await
+            .map_err(err)
+    })
+    .await?;
 
     let temp = std::env::temp_dir().join(format!("gvs_preview_{}.mp3", Uuid::new_v4()));
     std::fs::write(&temp, &result.audio_bytes).map_err(|e| err(AppError::Io(e)))?;

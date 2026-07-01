@@ -120,7 +120,7 @@ When changing behavior, update **both** `README.md` and `README.zh-TW.md` if use
 
 ## Known limitations (v0.1)
 
-- Batch TTS runs sequentially (SQLite / cache constraints)
+- Batch TTS concurrency is configurable in Settings (1–5); higher values increase API load
 - Custom voice **create via API** requires xAI Enterprise; free tier uses [Voice Library console](https://console.x.ai/team/default/voice/voice-library)
 - Custom voices region: US only (per xAI docs)
 

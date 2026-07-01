@@ -1,20 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SfxCategory {
+    #[default]
     Ambient,
     Action,
     Nature,
     Ui,
     Horror,
     Custom,
-}
-
-impl Default for SfxCategory {
-    fn default() -> Self {
-        Self::Ambient
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

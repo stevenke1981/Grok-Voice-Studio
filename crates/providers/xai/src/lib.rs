@@ -1,6 +1,7 @@
 mod chat;
 mod custom_voices;
 mod provider;
+mod retry;
 mod streaming_tts;
 
 pub use chat::{story_to_script_with_retry, XaiChatClient};

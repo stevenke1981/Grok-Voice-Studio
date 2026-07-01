@@ -7,6 +7,12 @@ export function useGeneration(setProject: (p: Project) => void) {
   const [generating, setGenerating] = useState(false);
   const [paused, setPaused] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [concurrencyHint, setConcurrencyHint] = useState<{
+    retryCount: number;
+    suggested: number;
+    message: string;
+  } | null>(null);
+
 
   const reloadProject = useCallback(async () => {
     const proj = await invoke<Project | null>("get_project");
@@ -17,9 +23,28 @@ export function useGeneration(setProject: (p: Project) => void) {
   useEffect(() => {
     const unlisten = listen<GenerateProgressEvent>("generate-progress", async (event) => {
       const p = event.payload;
-      setProgress({ current: p.current, total: p.total });
+
+      if (p.status === "retrying") {
+        return;
+      }
+
+      if (p.total > 0) {
+        setProgress({ current: p.current, total: p.total });
+      }
 
       await reloadProject();
+
+      if (p.status === "completed") {
+        if (p.suggested_concurrency != null && p.retry_count != null && p.retry_count > 0) {
+          setConcurrencyHint({
+            retryCount: p.retry_count,
+            suggested: p.suggested_concurrency,
+            message: p.error ?? "",
+          });
+        } else {
+          setConcurrencyHint(null);
+        }
+      }
 
       if (p.status === "completed" || p.status === "cancelled" || p.status === "failed") {
         setGenerating(false);
@@ -45,6 +70,7 @@ export function useGeneration(setProject: (p: Project) => void) {
       ).length;
 
       setGenerating(true);
+      setConcurrencyHint(null);
       setProgress({ current: 0, total: pending || proj.segments.length });
       try {
         await invoke("start_generate_job", { onlyFailed, force });
@@ -83,5 +109,22 @@ export function useGeneration(setProject: (p: Project) => void) {
     [reloadProject],
   );
 
-  return { generating, paused, progress, startAll, cancel, pause, resume, generateOne };
+  const applyConcurrencyHint = useCallback(() => {
+    if (!concurrencyHint) return null;
+    return concurrencyHint.suggested;
+  }, [concurrencyHint]);
+
+  return {
+    generating,
+    paused,
+    progress,
+    concurrencyHint,
+    applyConcurrencyHint,
+    clearConcurrencyHint: () => setConcurrencyHint(null),
+    startAll,
+    cancel,
+    pause,
+    resume,
+    generateOne,
+  };
 }

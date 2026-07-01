@@ -55,12 +55,19 @@ UI exposes this via `WorkflowGuide` — keep parse step prominent when `segments
 - `sync_voices` / `list_all_voices()` merges both; `VoiceInfo.is_custom`
 - TTS uses same `voice_id` for both types
 - Streaming: `wss://api.x.ai/v1/tts` via `streaming_tts.rs` (`text.delta` / `audio.delta`); setting `use_streaming_tts` (default on), REST fallback on failure
+- Retries: `crates/providers/xai/src/retry.rs` — up to 5 attempts with exponential backoff; honors `Retry-After` on HTTP 429; retries transient 5xx/network/timeouts; `synthesize_preferred` wraps streaming+REST as one attempt
+- Retry UI hook: `crates/core/src/retry_notify.rs` installed in `lib.rs` setup — logs to **日誌**, emits `api-retry` (all categories), and `generate-progress` status `retrying` during batch TTS
+- Retry jitter: `retry.rs` `backoff_delay_with_jitter` desyncs parallel batch workers; `sync_voices` / `preview_voice` use `with_retry_context`
+- Batch stats in `settings.json`: `last_batch_retry_count`, `suggested_concurrency`; `apply_concurrency_suggestion` / `dismiss_concurrency_suggestion` commands
+- Story mode Chat: `chat.rs` uses same retry policy; JSON parse failures get one extra LLM attempt via `story_to_script_with_retry`
 
 ### Generation (`apps/desktop/src-tauri/src/services/generation.rs`)
 
 - `useGeneration` hook must reload project via `get_project` on `generate-progress` events (avoid stale React closure)
 - `start_generate_job` validates: non-empty segments, API key if pending dialogue exists
 - SFX segments: `resolve_sfx_segment` — no API key
+- Batch jobs honor `generation_concurrency` (Settings, 1–5) via `Semaphore` + `JoinSet`; `persist_project` runs once after batch
+- TTS text: `grok_voice_core::build_tts_text` applies `emotion_hint` or `style_prompt` as `[tag]` prefix
 
 ### Export (`crates/audio/src/ffmpeg.rs`)
 

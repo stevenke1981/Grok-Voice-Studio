@@ -204,7 +204,7 @@ fn generate_silence(config: &FfmpegConfig, duration_ms: u32, output: &Path) -> R
         "-f",
         "lavfi",
         "-i",
-        &format!("anullsrc=r=24000:cl=mono"),
+        "anullsrc=r=24000:cl=mono",
         "-t",
         &duration_sec,
         "-c:a",

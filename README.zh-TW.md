@@ -118,7 +118,7 @@ pnpm --dir apps/desktop exec vite build
 
 ## 已知限制（v0.1）
 
-- 批次生成目前為循序執行
+- 批次生成並行度可在設定中調整（1–5），數值越高 API 負載越大
 - API 建立自訂語音需 Enterprise；一般用戶請用 Console
 - 自訂語音地區限制請參考 xAI 官方文件
 

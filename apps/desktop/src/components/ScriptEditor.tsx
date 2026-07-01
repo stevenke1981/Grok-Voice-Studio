@@ -1,5 +1,5 @@
 import { DIALOGUE_TEMPLATES, STORY_TEMPLATES } from "../templates";
-import { t, type Lang } from "../i18n";
+import { t, tf, type Lang } from "../i18n";
 
 const SPEECH_TAGS = ["[pause]", "[sigh]", "[laugh]", "[breath]", "[long-pause]"];
 
@@ -11,6 +11,10 @@ interface Props {
   onParse: () => void;
   onLoadTemplate: (content: string, style?: string) => void;
   onConvertStory?: () => void;
+  convertingStory?: boolean;
+  storyRetryMessage?: string | null;
+  storyAttempt?: number;
+  storyPhase?: string | null;
   storyStyle?: string;
   onStoryStyleChange?: (v: string) => void;
   highlightParse?: boolean;
@@ -26,6 +30,10 @@ export function ScriptEditor({
   onParse,
   onLoadTemplate,
   onConvertStory,
+  convertingStory,
+  storyRetryMessage,
+  storyAttempt,
+  storyPhase,
   storyStyle,
   onStoryStyleChange,
   highlightParse,
@@ -96,6 +104,7 @@ export function ScriptEditor({
               className="btn btn-sm"
               value={storyStyle ?? "一般敘事"}
               onChange={(e) => onStoryStyleChange?.(e.target.value)}
+              disabled={convertingStory}
             >
               <option value="一般敘事">一般敘事</option>
               <option value="恐怖">恐怖</option>
@@ -103,12 +112,30 @@ export function ScriptEditor({
               <option value="短影音旁白">短影音旁白</option>
               <option value="漫畫解說">漫畫解說</option>
             </select>
-            <button className="btn btn-sm btn-primary" onClick={onConvertStory}>
-              {t(lang, "convertStory")}
+            <button
+              className="btn btn-sm btn-primary"
+              onClick={onConvertStory}
+              disabled={convertingStory || !value.trim()}
+            >
+              {convertingStory ? t(lang, "convertingStory") : t(lang, "convertStory")}
             </button>
           </>
         )}
       </div>
+      {mode === "story" && convertingStory && (
+        <div className="story-convert-status">
+          <span className="story-convert-spinner" aria-hidden />
+          <span>
+            {tf(lang, "storyAttempt", { n: storyAttempt ?? 1 })}
+            {storyPhase === "json_repair" ? " · JSON 修復" : ""}
+          </span>
+          {storyRetryMessage && (
+            <span className="story-retry-hint" title={storyRetryMessage}>
+              {t(lang, "apiRetrying")} {storyRetryMessage}
+            </span>
+          )}
+        </div>
+      )}
       {mode === "dialogue" && (
         <div
           style={{
@@ -130,6 +157,7 @@ export function ScriptEditor({
         className="script-editor"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        readOnly={mode === "story" && convertingStory}
         placeholder={
           mode === "story"
             ? "貼上完整故事文本，或從上方選擇模板..."

@@ -13,19 +13,14 @@ pub enum RoleType {
     System,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum VoiceProvider {
+    #[default]
     Xai,
     Openai,
     Elevenlabs,
     Local,
-}
-
-impl Default for VoiceProvider {
-    fn default() -> Self {
-        Self::Xai
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

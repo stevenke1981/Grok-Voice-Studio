@@ -1,9 +1,12 @@
 mod commands;
+mod events;
 mod log_store;
 mod services;
 mod state;
 
+use grok_voice_core::{install_retry_hook, install_story_convert_hook};
 use state::AppState;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -14,9 +17,96 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::new())
+        .setup(|app| {
+            let handle = app.handle().clone();
+            let state = app.state::<AppState>();
+            let logs = state.logs.clone();
+            let active_job = state.active_job_id.clone();
+            let batch_tts_retries = state.batch_tts_retries.clone();
+
+            install_story_convert_hook(Box::new({
+                let handle = handle.clone();
+                move |progress| {
+                    let _ = handle.emit(
+                        "story-convert-progress",
+                        events::StoryConvertProgressEvent {
+                            attempt: progress.attempt,
+                            phase: progress.phase.to_string(),
+                            message: progress.message,
+                        },
+                    );
+                }
+            }));
+
+            install_retry_hook(Box::new(move |notification| {
+                let subject = events::retry_subject(
+                    notification.context.as_deref(),
+                    notification.category,
+                );
+                let message = format!(
+                    "{subject} 重試 {}/{}，等待 {}s: {}",
+                    notification.attempt,
+                    notification.max_retries,
+                    notification.delay_secs,
+                    notification.error
+                );
+                logs.append_with_emit(&handle, "warn", "xai_retry", message.clone());
+
+                let _ = handle.emit(
+                    "api-retry",
+                    events::ApiRetryEvent {
+                        category: notification.category.to_string(),
+                        context: notification.context.clone(),
+                        message: message.clone(),
+                        attempt: notification.attempt,
+                        max_retries: notification.max_retries,
+                        delay_secs: notification.delay_secs,
+                    },
+                );
+
+                if notification.category == "chat"
+                    && notification.context.as_deref() == Some("story")
+                {
+                    let _ = handle.emit(
+                        "story-convert-progress",
+                        events::StoryConvertProgressEvent {
+                            attempt: notification.attempt + 1,
+                            phase: "api_retry".into(),
+                            message: Some(message.clone()),
+                        },
+                    );
+                }
+
+                if notification.category == "tts" {
+                    batch_tts_retries.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if let Ok(guard) = active_job.lock() {
+                        if let Some(job_id) = guard.as_deref() {
+                            let _ = handle.emit(
+                                "generate-progress",
+                                services::GenerateProgressEvent {
+                                    job_id: job_id.to_string(),
+                                    current: 0,
+                                    total: 0,
+                                    segment_id: notification.context.clone(),
+                                    segment: None,
+                                    status: "retrying".into(),
+                                    error: Some(message),
+                                    cached: false,
+                                    retry_count: None,
+                                    suggested_concurrency: None,
+                                },
+                            );
+                        }
+                    }
+                }
+            }));
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::get_settings,
             commands::save_settings,
+            commands::apply_concurrency_suggestion,
+            commands::dismiss_concurrency_suggestion,
             commands::create_new_project,
             commands::open_project,
             commands::save_current_project,

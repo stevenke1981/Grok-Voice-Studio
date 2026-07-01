@@ -4,8 +4,10 @@ use async_trait::async_trait;
 use grok_voice_core::{
     AppError, AudioCodec, TtsOutputFormat, TtsRequest, TtsResult, VoiceInfo, MAX_TTS_CHARS,
 };
-use reqwest::StatusCode;
+use reqwest::{header::RETRY_AFTER, StatusCode};
 use serde::{Deserialize, Serialize};
+
+use crate::retry::with_retry_category;
 
 pub const XAI_TTS_URL: &str = "https://api.x.ai/v1/tts";
 pub const XAI_VOICES_URL: &str = "https://api.x.ai/v1/tts/voices";
@@ -44,23 +46,13 @@ impl XaiTtsProvider {
         format!("Bearer {}", self.api_key)
     }
 
-    async fn request_with_retry<F, Fut, T>(&self, mut f: F) -> Result<T, AppError>
-    where
-        F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<T, AppError>>,
-    {
-        let mut attempt = 0;
-        loop {
-            match f().await {
-                Ok(v) => return Ok(v),
-                Err(AppError::RateLimited) if attempt < 3 => {
-                    attempt += 1;
-                    let delay = Duration::from_secs(2u64.pow(attempt));
-                    tokio::time::sleep(delay).await;
-                }
-                Err(e) => return Err(e),
-            }
-        }
+    pub(crate) fn parse_retry_after(
+        headers: &reqwest::header::HeaderMap,
+    ) -> Option<u64> {
+        headers
+            .get(RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
     }
 }
 
@@ -110,11 +102,20 @@ struct XaiVoice {
     description: Option<String>,
 }
 
-pub(crate) fn map_status_error(status: StatusCode, body: &str) -> AppError {
+pub(crate) fn map_status_error(
+    status: StatusCode,
+    body: &str,
+    retry_after_secs: Option<u64>,
+) -> AppError {
     match status {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => AppError::AuthFailed,
-        StatusCode::TOO_MANY_REQUESTS => AppError::RateLimited,
+        StatusCode::TOO_MANY_REQUESTS => AppError::RateLimited { retry_after_secs },
         StatusCode::PAYMENT_REQUIRED => AppError::QuotaExceeded,
+        StatusCode::BAD_GATEWAY
+        | StatusCode::SERVICE_UNAVAILABLE
+        | StatusCode::GATEWAY_TIMEOUT => {
+            AppError::ProviderUnavailable(format!("HTTP {status}: {body}"))
+        }
         _ => AppError::ProviderUnavailable(format!("HTTP {status}: {body}")),
     }
 }
@@ -126,7 +127,7 @@ impl TtsProvider for XaiTtsProvider {
             return Err(AppError::MissingApiKey);
         }
 
-        self.request_with_retry(|| async {
+        with_retry_category(|| async {
             let resp = self
                 .client
                 .get(XAI_VOICES_URL)
@@ -137,8 +138,9 @@ impl TtsProvider for XaiTtsProvider {
 
             if !resp.status().is_success() {
                 let status = resp.status();
+                let retry_after_secs = Self::parse_retry_after(resp.headers());
                 let body = resp.text().await.unwrap_or_default();
-                return Err(map_status_error(status, &body));
+                return Err(map_status_error(status, &body, retry_after_secs));
             }
 
             let data: VoicesResponse = resp
@@ -160,7 +162,7 @@ impl TtsProvider for XaiTtsProvider {
                     gender: None,
                 })
                 .collect())
-        })
+        }, "voices")
         .await
     }
 
@@ -173,6 +175,12 @@ impl TtsProvider for XaiTtsProvider {
     }
 
     async fn synthesize(&self, req: TtsRequest) -> Result<TtsResult, AppError> {
+        with_retry_category(|| self.synthesize_once(req.clone()), "tts").await
+    }
+}
+
+impl XaiTtsProvider {
+    pub(crate) async fn synthesize_once(&self, req: TtsRequest) -> Result<TtsResult, AppError> {
         if self.api_key.is_empty() {
             return Err(AppError::MissingApiKey);
         }
@@ -190,42 +198,40 @@ impl TtsProvider for XaiTtsProvider {
             output_format: format_to_xai(&req.output_format),
         };
 
-        self.request_with_retry(|| async {
-            let resp = self
-                .client
-                .post(XAI_TTS_URL)
-                .header("Authorization", self.auth_header())
-                .header("Content-Type", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|e| AppError::ProviderUnavailable(e.to_string()))?;
+        let resp = self
+            .client
+            .post(XAI_TTS_URL)
+            .header("Authorization", self.auth_header())
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AppError::ProviderUnavailable(e.to_string()))?;
 
-            if !resp.status().is_success() {
-                let status = resp.status();
-                let body_text = resp.text().await.unwrap_or_default();
-                return Err(map_status_error(status, &body_text));
-            }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let retry_after_secs = Self::parse_retry_after(resp.headers());
+            let body_text = resp.text().await.unwrap_or_default();
+            return Err(map_status_error(status, &body_text, retry_after_secs));
+        }
 
-            let content_type = resp
-                .headers()
-                .get("content-type")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("audio/mpeg")
-                .to_string();
+        let content_type = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("audio/mpeg")
+            .to_string();
 
-            let audio_bytes = resp
-                .bytes()
-                .await
-                .map_err(|e| AppError::ProviderUnavailable(e.to_string()))?
-                .to_vec();
+        let audio_bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| AppError::ProviderUnavailable(e.to_string()))?
+            .to_vec();
 
-            Ok(TtsResult {
-                audio_bytes,
-                content_type,
-            })
+        Ok(TtsResult {
+            audio_bytes,
+            content_type,
         })
-        .await
     }
 }
 

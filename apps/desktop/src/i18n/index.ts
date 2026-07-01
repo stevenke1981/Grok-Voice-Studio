@@ -43,6 +43,10 @@ const zh = {
   dialogueMode: "對話模式",
   storyModeTab: "故事模式",
   convertStory: "轉換為劇本",
+  convertingStory: "轉換中…",
+  storyAttempt: "第 {n} 次嘗試",
+  concurrencyHint: "本批次 API 重試 {n} 次，建議並行度降至 {c}",
+  applyConcurrencyHint: "套用並儲存",
   style: "風格",
   timeline: "時間線",
   cleanupCache: "清理快取",
@@ -97,6 +101,7 @@ const zh = {
   delete: "刪除",
   streamingTts: "Streaming TTS（WebSocket）",
   streamingTtsHint: "使用 xAI WebSocket 串流生成，失敗時自動改為 REST",
+  apiRetrying: "API 暫時錯誤，正在重試…",
 };
 
 const en: typeof zh = {
@@ -142,6 +147,10 @@ const en: typeof zh = {
   dialogueMode: "Dialogue",
   storyModeTab: "Story",
   convertStory: "Convert to Script",
+  convertingStory: "Converting…",
+  storyAttempt: "Attempt {n}",
+  concurrencyHint: "{n} API retries — try concurrency {c}",
+  applyConcurrencyHint: "Apply & Save",
   style: "Style",
   timeline: "Timeline",
   cleanupCache: "Cleanup Cache",
@@ -196,8 +205,21 @@ const en: typeof zh = {
   delete: "Delete",
   streamingTts: "Streaming TTS (WebSocket)",
   streamingTtsHint: "Use xAI WebSocket streaming; falls back to REST on failure",
+  apiRetrying: "Temporary API error — retrying…",
 };
 
 export function t(lang: Lang, key: keyof typeof zh): string {
   return (lang === "en" ? en : zh)[key];
+}
+
+export function tf(
+  lang: Lang,
+  key: keyof typeof zh,
+  vars: Record<string, string | number>,
+): string {
+  let text = t(lang, key);
+  for (const [k, v] of Object.entries(vars)) {
+    text = text.split(`{${k}}`).join(String(v));
+  }
+  return text;
 }

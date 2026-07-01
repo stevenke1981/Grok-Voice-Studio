@@ -19,6 +19,8 @@ interface Props {
   onClose: () => void;
   onVerified?: () => void;
   onVoicesChanged?: () => void;
+  concurrencyHint?: string | null;
+  onApplyConcurrencyHint?: () => void;
 }
 
 export function SettingsModal({
@@ -36,6 +38,8 @@ export function SettingsModal({
   onClose,
   onVerified,
   onVoicesChanged,
+  concurrencyHint,
+  onApplyConcurrencyHint,
 }: Props) {
   const [verifying, setVerifying] = useState(false);
   const [verifyMsg, setVerifyMsg] = useState<string | null>(null);
@@ -102,6 +106,16 @@ export function SettingsModal({
             value={concurrency}
             onChange={(e) => onConcurrencyChange(Number(e.target.value))}
           />
+          {concurrencyHint && (
+            <p className="field-hint field-hint-warn">
+              {concurrencyHint}{" "}
+              {onApplyConcurrencyHint && (
+                <button type="button" className="link-btn" onClick={onApplyConcurrencyHint}>
+                  {t(lang, "applyConcurrencyHint")}
+                </button>
+              )}
+            </p>
+          )}
         </div>
         <div className="inspector-field">
           <label>
