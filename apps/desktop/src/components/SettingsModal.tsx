@@ -13,6 +13,8 @@ interface Props {
   onCostChange: (v: string) => void;
   concurrency: number;
   onConcurrencyChange: (v: number) => void;
+  useStreamingTts: boolean;
+  onUseStreamingTtsChange: (v: boolean) => void;
   onSave: () => void;
   onClose: () => void;
   onVerified?: () => void;
@@ -28,6 +30,8 @@ export function SettingsModal({
   onCostChange,
   concurrency,
   onConcurrencyChange,
+  useStreamingTts,
+  onUseStreamingTtsChange,
   onSave,
   onClose,
   onVerified,
@@ -52,6 +56,7 @@ export function SettingsModal({
           costPer1kChars: costPer1k ? Number(costPer1k) : null,
           onboardingDone: true,
           uiLanguage: lang,
+          useStreamingTts,
         });
       }
       const result = await invoke<{ ok: boolean; message: string }>("verify_api_key");
@@ -97,6 +102,17 @@ export function SettingsModal({
             value={concurrency}
             onChange={(e) => onConcurrencyChange(Number(e.target.value))}
           />
+        </div>
+        <div className="inspector-field">
+          <label>
+            <input
+              type="checkbox"
+              checked={useStreamingTts}
+              onChange={(e) => onUseStreamingTtsChange(e.target.checked)}
+            />{" "}
+            {t(lang, "streamingTts")}
+          </label>
+          <p className="field-hint">{t(lang, "streamingTtsHint")}</p>
         </div>
         {verifyMsg && (
           <div className={`verify-msg${verifyOk ? "" : " verify-msg-error"}`}>{verifyMsg}</div>

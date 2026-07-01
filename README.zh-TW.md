@@ -13,7 +13,7 @@
 - **劇本編輯** — 對話格式（`角色：台詞`）、情緒標記、語音標籤（`[pause]`、`[sigh]`…）
 - **故事模式** — 用 Grok Chat 將散文轉成多角色劇本
 - **引導流程** — 輸入劇本 → **解析劇本** → 指定語音 → 生成 → 匯出
-- **xAI 語音** — 內建 voice + [自訂語音](https://docs.x.ai/developers/model-capabilities/audio/custom-voices)
+- **xAI 語音** — 內建 voice + [自訂語音](https://docs.x.ai/developers/model-capabilities/audio/custom-voices)；可選 [WebSocket 串流 TTS](https://docs.x.ai/developers/model-capabilities/audio/text-to-speech#streaming-tts-websocket)，失敗時自動改 REST
 - **音效庫** — 15 種內建音效、可匯入自訂檔、浮動可拖曳視窗
 - **批次生成** — 背景佇列、暫停／取消／重試、音訊快取
 - **匯出** — MP3／WAV／FLAC + SRT／VTT／ASS（需 FFmpeg）
@@ -119,7 +119,6 @@ pnpm --dir apps/desktop exec vite build
 ## 已知限制（v0.1）
 
 - 批次生成目前為循序執行
-- 未實作 Streaming TTS WebSocket
 - API 建立自訂語音需 Enterprise；一般用戶請用 Console
 - 自訂語音地區限制請參考 xAI 官方文件
 

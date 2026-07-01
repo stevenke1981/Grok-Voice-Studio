@@ -135,4 +135,5 @@ export interface AppSettings {
   cost_per_1k_chars?: number;
   onboarding_done: boolean;
   ui_language: string;
+  use_streaming_tts: boolean;
 }

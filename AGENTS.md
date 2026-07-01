@@ -54,6 +54,7 @@ UI exposes this via `WorkflowGuide` — keep parse step prominent when `segments
 - Custom: `GET https://api.x.ai/v1/custom-voices` (separate list)
 - `sync_voices` / `list_all_voices()` merges both; `VoiceInfo.is_custom`
 - TTS uses same `voice_id` for both types
+- Streaming: `wss://api.x.ai/v1/tts` via `streaming_tts.rs` (`text.delta` / `audio.delta`); setting `use_streaming_tts` (default on), REST fallback on failure
 
 ### Generation (`apps/desktop/src-tauri/src/services/generation.rs`)
 
@@ -111,7 +112,7 @@ For UI changes: run `pnpm dev` and verify workflow (parse gate, SFX window, voic
 |------|------------|
 | Parser / script syntax | `crates/core/src/parser.rs` + tests in same file |
 | New segment fields | `models.rs` + `types.ts` + `apply_parsed_script` |
-| TTS / voices | `crates/providers/xai/` |
+| TTS / voices / streaming WS | `crates/providers/xai/` (`streaming_tts.rs`) |
 | New Tauri command | `commands.rs` → `lib.rs` → React invoke |
 | UI panel | `apps/desktop/src/components/` |
 | Export / subtitles | `crates/audio/` |

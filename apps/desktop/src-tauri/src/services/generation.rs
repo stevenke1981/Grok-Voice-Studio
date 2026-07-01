@@ -6,8 +6,8 @@ use grok_voice_core::{
     default_split, save_project, AppError, Character, ScriptSegment, SegmentKind, SegmentStatus,
     TtsOutputFormat, TtsRequest,
 };
-use grok_voice_storage::{load_api_key, new_cache_entry, AudioCache, SfxStore};
-use grok_voice_xai::{TtsProvider, XaiTtsProvider};
+use grok_voice_storage::{load_api_key, new_cache_entry, AudioCache, SettingsStore, SfxStore};
+use grok_voice_xai::XaiTtsProvider;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use std::sync::Mutex;
@@ -118,7 +118,16 @@ impl GenerationService {
             })
             .await;
 
-        tracing::info!(target: "generate", "TTS segment {segment_id}");
+        let use_streaming = SettingsStore::open()
+            .ok()
+            .and_then(|s| s.load().ok())
+            .map(|s| s.use_streaming_tts)
+            .unwrap_or(true);
+
+        tracing::info!(
+            target: "generate",
+            "TTS segment {segment_id} (streaming={use_streaming})"
+        );
 
         let req = TtsRequest {
             text,
@@ -127,7 +136,7 @@ impl GenerationService {
             output_format: output_format.clone(),
         };
 
-        let result = provider.synthesize(req).await?;
+        let result = provider.synthesize_preferred(req, use_streaming).await?;
         let ext = if result.content_type.contains("wav") {
             "wav"
         } else {

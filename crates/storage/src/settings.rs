@@ -22,6 +22,8 @@ pub struct AppSettings {
     pub onboarding_done: bool,
     #[serde(default = "default_lang_setting")]
     pub ui_language: String,
+    #[serde(default = "default_true")]
+    pub use_streaming_tts: bool,
 }
 
 fn default_true() -> bool {
@@ -47,6 +49,7 @@ impl Default for AppSettings {
             cost_per_1k_chars: None,
             onboarding_done: false,
             ui_language: "zh".into(),
+            use_streaming_tts: true,
         }
     }
 }

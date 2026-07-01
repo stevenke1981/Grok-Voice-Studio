@@ -80,7 +80,7 @@ struct XaiOutputFormat {
     bit_rate: Option<u32>,
 }
 
-fn codec_to_str(codec: &AudioCodec) -> &'static str {
+pub(crate) fn codec_to_str(codec: &AudioCodec) -> &'static str {
     match codec {
         AudioCodec::Mp3 => "mp3",
         AudioCodec::Wav => "wav",

@@ -15,7 +15,7 @@ Build dialogue projects, assign voices per character, batch-generate audio, mix 
 - **Script editor** — dialogue format (`角色：台詞`), emotion hints, speech tags (`[pause]`, `[sigh]`, …)
 - **Story mode** — convert prose to multi-character script via Grok Chat
 - **Parse → assign voices → generate → export** — guided stepper in the UI
-- **xAI TTS** — built-in voices + [custom voices](https://docs.x.ai/developers/model-capabilities/audio/custom-voices) (`GET /v1/custom-voices`)
+- **xAI TTS** — built-in voices + [custom voices](https://docs.x.ai/developers/model-capabilities/audio/custom-voices) (`GET /v1/custom-voices`); optional [streaming WebSocket](https://docs.x.ai/developers/model-capabilities/audio/text-to-speech#streaming-tts-websocket) with REST fallback
 - **SFX library** — 15 built-in sounds, import custom clips, compose in script (`音效：雨聲`, inline `{雷聲}`)
 - **Batch generation** — background jobs, pause/cancel/retry, SQLite audio cache
 - **Export** — mixdown + SRT/VTT/ASS, optional per-character stems (FFmpeg)
@@ -121,7 +121,6 @@ When changing behavior, update **both** `README.md` and `README.zh-TW.md` if use
 ## Known limitations (v0.1)
 
 - Batch TTS runs sequentially (SQLite / cache constraints)
-- Streaming TTS WebSocket not implemented
 - Custom voice **create via API** requires xAI Enterprise; free tier uses [Voice Library console](https://console.x.ai/team/default/voice/voice-library)
 - Custom voices region: US only (per xAI docs)
 

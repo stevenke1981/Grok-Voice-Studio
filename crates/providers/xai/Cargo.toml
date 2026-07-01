@@ -12,3 +12,7 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"], de
 async-trait = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+base64 = "0.22"
+urlencoding = "2"

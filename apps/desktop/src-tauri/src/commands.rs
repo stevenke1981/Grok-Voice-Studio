@@ -9,8 +9,8 @@ use grok_voice_core::{
 use grok_voice_storage::{has_api_key, load_api_key, save_api_key, SettingsStore, SfxStore};
 use std::collections::HashMap;
 use grok_voice_xai::{
-    fallback_voices, story_to_script_with_retry, CreateCustomVoiceRequest, TtsProvider,
-    XaiChatClient, XaiTtsProvider,
+    fallback_voices, story_to_script_with_retry, CreateCustomVoiceRequest, XaiChatClient,
+    XaiTtsProvider,
 };
 use tauri::{AppHandle, State};
 use uuid::Uuid;
@@ -36,6 +36,7 @@ pub async fn get_settings() -> Result<serde_json::Value, String> {
         "cost_per_1k_chars": settings.cost_per_1k_chars,
         "onboarding_done": settings.onboarding_done,
         "ui_language": settings.ui_language,
+        "use_streaming_tts": settings.use_streaming_tts,
     }))
 }
 
@@ -49,6 +50,7 @@ pub async fn save_settings(
     cost_per_1k_chars: Option<f64>,
     onboarding_done: Option<bool>,
     ui_language: Option<String>,
+    use_streaming_tts: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     if let Some(key) = api_key.filter(|k| !k.is_empty()) {
@@ -69,6 +71,9 @@ pub async fn save_settings(
     }
     if let Some(lang) = ui_language {
         settings.ui_language = lang;
+    }
+    if let Some(streaming) = use_streaming_tts {
+        settings.use_streaming_tts = streaming;
     }
     store.save(&settings).map_err(err)?;
     log_info(&state.logs, "settings", "設定已儲存");
@@ -435,15 +440,23 @@ pub async fn preview_voice(
     text: Option<String>,
 ) -> Result<String, String> {
     let api_key = load_api_key().map_err(err)?.ok_or("尚未設定 API Key")?;
+    let use_streaming = SettingsStore::open()
+        .map_err(err)?
+        .load()
+        .map_err(err)?
+        .use_streaming_tts;
     let provider = XaiTtsProvider::new(api_key);
     let sample = text.unwrap_or_else(|| "你好，這是語音試聽。".into());
     let result = provider
-        .synthesize(grok_voice_core::TtsRequest {
-            text: sample,
-            voice_id,
-            language: "zh".into(),
-            output_format: grok_voice_core::TtsOutputFormat::default(),
-        })
+        .synthesize_preferred(
+            grok_voice_core::TtsRequest {
+                text: sample,
+                voice_id,
+                language: "zh".into(),
+                output_format: grok_voice_core::TtsOutputFormat::default(),
+            },
+            use_streaming,
+        )
         .await
         .map_err(err)?;
 

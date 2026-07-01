@@ -56,6 +56,7 @@ function App() {
   const [apiKey, setApiKey] = useState("");
   const [costPer1k, setCostPer1k] = useState("");
   const [concurrency, setConcurrency] = useState(2);
+  const [useStreamingTts, setUseStreamingTts] = useState(true);
   const [newProjectTitle, setNewProjectTitle] = useState("我的配音專案");
   const [editorMode, setEditorMode] = useState<"dialogue" | "story">("dialogue");
   const [storyText, setStoryText] = useState("");
@@ -86,6 +87,7 @@ function App() {
       setSettings(s);
       setLang((s.ui_language as Lang) || "zh");
       setConcurrency(s.generation_concurrency || 2);
+      setUseStreamingTts(s.use_streaming_tts ?? true);
       if (s.cost_per_1k_chars) setCostPer1k(String(s.cost_per_1k_chars));
       if (!s.onboarding_done) setShowOnboarding(true);
     } catch {
@@ -314,6 +316,7 @@ function App() {
         costPer1kChars: costPer1k ? Number(costPer1k) : null,
         onboardingDone: true,
         uiLanguage: lang,
+        useStreamingTts,
       });
       await loadSettings();
       setShowSettings(false);
@@ -356,6 +359,8 @@ function App() {
             onCostChange={setCostPer1k}
             concurrency={concurrency}
             onConcurrencyChange={setConcurrency}
+            useStreamingTts={useStreamingTts}
+            onUseStreamingTtsChange={setUseStreamingTts}
             onSave={handleSaveSettings}
             onClose={() => setShowSettings(false)}
             onVerified={loadSettings}
@@ -539,6 +544,8 @@ function App() {
           onCostChange={setCostPer1k}
           concurrency={concurrency}
           onConcurrencyChange={setConcurrency}
+          useStreamingTts={useStreamingTts}
+          onUseStreamingTtsChange={setUseStreamingTts}
           onSave={handleSaveSettings}
           onClose={() => setShowSettings(false)}
           onVerified={loadSettings}

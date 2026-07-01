@@ -95,6 +95,8 @@ const zh = {
   noCustomVoices: "尚無自訂語音，請至 Console 建立或上傳參考音訊",
   confirmDeleteVoice: "確定刪除此自訂語音？",
   delete: "刪除",
+  streamingTts: "Streaming TTS（WebSocket）",
+  streamingTtsHint: "使用 xAI WebSocket 串流生成，失敗時自動改為 REST",
 };
 
 const en: typeof zh = {
@@ -192,6 +194,8 @@ const en: typeof zh = {
   noCustomVoices: "No custom voices yet",
   confirmDeleteVoice: "Delete this custom voice?",
   delete: "Delete",
+  streamingTts: "Streaming TTS (WebSocket)",
+  streamingTtsHint: "Use xAI WebSocket streaming; falls back to REST on failure",
 };
 
 export function t(lang: Lang, key: keyof typeof zh): string {
