@@ -1,0 +1,29 @@
+[package]
+name = "grok-voice-studio"
+version.workspace = true
+edition.workspace = true
+description = "Grok Voice Studio - Multi-character voice dubbing desktop app"
+
+[lib]
+name = "grok_voice_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+grok-voice-core = { path = "../../../crates/core" }
+grok-voice-xai = { path = "../../../crates/providers/xai" }
+grok-voice-audio = { path = "../../../crates/audio" }
+grok-voice-storage = { path = "../../../crates/storage" }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tauri-plugin-fs = "2"

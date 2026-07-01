@@ -1,0 +1,21 @@
+target/
+node_modules/
+dist/
+.env
+*.db
+.DS_Store
+apps/desktop/dist/
+
+# IDE / agent harness (local only)
+terminals/
+mcps/
+
+# OS / editor
+Thumbs.db
+*.log
+.idea/
+.vscode/
+*.swp
+
+# Tauri / Rust
+apps/desktop/src-tauri/target/

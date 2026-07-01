@@ -1,0 +1,9 @@
+[package]
+name = "grok-voice-audio"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+grok-voice-core = { path = "../core" }
+serde = { workspace = true }
+thiserror = { workspace = true }

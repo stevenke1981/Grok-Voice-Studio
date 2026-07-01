@@ -1,0 +1,20 @@
+[package]
+name = "grok-voice-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+grok-voice-core = { path = "../core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+rusqlite = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+chrono = { workspace = true }
+dirs = { workspace = true }
+keyring = { version = "3", features = ["windows-native"] }
+uuid = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }

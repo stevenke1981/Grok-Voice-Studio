@@ -1,0 +1,12 @@
+{
+  "name": "grok-voice-studio-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "pnpm --dir apps/desktop tauri dev",
+    "tauri": "pnpm --dir apps/desktop tauri",
+    "build": "pnpm --dir apps/desktop tauri build",
+    "test": "cargo test --workspace",
+    "fmt": "cargo fmt --all",
+    "clippy": "cargo clippy --workspace -- -D warnings"
+  }
+}

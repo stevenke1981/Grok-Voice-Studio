@@ -1,0 +1,9 @@
+mod chat;
+mod custom_voices;
+mod provider;
+
+pub use chat::{story_to_script_with_retry, XaiChatClient};
+pub use custom_voices::{
+    CreateCustomVoiceRequest, CustomVoiceDetails, XAI_CUSTOM_VOICES_URL,
+};
+pub use provider::{fallback_voices, TtsProvider, XaiTtsProvider, XAI_TTS_URL, XAI_VOICES_URL};
